@@ -21,8 +21,8 @@
 
 ### 🧹 scene 전환 시 이미지 자동 제거 기능 (※ 주석처리 상태)
 
-- scene이 바뀔 때 이전 scene의 이미지 디렉토리를 삭제하는 `rm_folder()` 함수가 구현되어 있습니다.
-- 현재는 **안전성을 위해 주석처리** 되어 있으며, 필요 시 주석을 해제하여 사용 가능합니다.
+- scene이 바뀔 때 이전 scene의 이미지 디렉토리를 삭제하는 `rm_folder()` 함수 구현
+
 
 #### 🔧 구현 위치
 - `src/home_robot_sim/home_robot_sim/env/habitat_objectnav_env/visualizer.py`
@@ -39,7 +39,7 @@
 
 - `projects/habitat_ovmm/evaluator.py`
   - `local_evaluate()` 함수 내부에서 `self.env.reset()`이 호출되며,
-    그 과정에서 `set_vis_dir()`이 호출되어 scene별 디렉토리를 자동 설정합니다.
+    그 과정에서 `set_vis_dir()`이 호출되어 scene별 디렉토리를 자동 설정.
   - `num_episodes()` 함수 내부에서 몇 개의 scene이 사용되는지 제어 가능
 
 ---
