@@ -184,71 +184,6 @@ class Visualizer:
                 )
             self.last_xy = (curr_x, curr_y)
 
-            # Save individual maps to separate subfolders
-            if self.print_images:
-                # Create subfolders
-                subfolders = {
-                    "obstacles": os.path.join(self.vis_dir, "obstacles"),
-                    "goals": os.path.join(self.vis_dir, "goals"),
-                    "closest_goals": os.path.join(self.vis_dir, "closest_goals"),
-                    "explored": os.path.join(self.vis_dir, "explored"),
-                }
-                for subfolder in subfolders.values():
-                    os.makedirs(subfolder, exist_ok=True)
-
-                # Function to save a map as an image
-                def save_map(map_data, folder, filename, is_binary=True):
-                    if map_data is None:
-                        return
-                    # Create a temporary map for visualization
-                    temp_map = np.zeros_like(map_data, dtype=np.uint8)
-                    if is_binary:
-                        temp_map[map_data == 1] = (
-                            PI.OBSTACLES
-                            if folder == subfolders["obstacles"]
-                            else (
-                                PI.REST_OF_GOAL
-                                if folder == subfolders["goals"]
-                                else (
-                                    PI.CLOSEST_GOAL
-                                    if folder == subfolders["closest_goals"]
-                                    else PI.EXPLORED
-                                )
-                            )
-                        )
-                    else:
-                        temp_map = (map_data * 255).astype(
-                            np.uint8
-                        )  # For non-binary, scale to 0-255
-                    map_vis = Image.new("P", (temp_map.shape[1], temp_map.shape[0]))
-                    map_vis.putpalette(map_color_palette)
-                    map_vis.putdata(temp_map.flatten())
-                    map_vis = map_vis.convert("RGB")
-                    map_vis = np.flipud(map_vis)
-                    map_vis = map_vis[:, :, [2, 1, 0]]
-                    map_vis = cv2.resize(
-                        map_vis,
-                        (SEMANTIC_MAP_WIDTH, IMAGE_HEIGHT),
-                        interpolation=cv2.INTER_NEAREST,
-                    )
-                    cv2.imwrite(os.path.join(folder, filename), map_vis)
-
-                # Save each map
-                save_map(
-                    obstacle_map,
-                    subfolders["obstacles"],
-                    f"obstacle_{timestep:03d}.png",
-                )
-                save_map(goal_map, subfolders["goals"], f"goal_{timestep:03d}.png")
-                save_map(
-                    closest_goal_map,
-                    subfolders["closest_goals"],
-                    f"closest_goal_{timestep:03d}.png",
-                )
-                save_map(
-                    explored_map, subfolders["explored"], f"explored_{timestep:03d}.png"
-                )
-
             semantic_map += PI.SEM_START
 
             # Obstacles, explored, and visited areas
@@ -471,7 +406,7 @@ class ExplorationVisualizer:
             closest_goal_map: (M, M) binary array denoting closest goal
              location in the goal map in geodesic distance
             sensor_pose: (7,) array denoting global pose (x, y, o)
-             and local map boundaries planning window (gy1, gy2, gx1, gx2)
+             and local map boundaries planning window (gy1, gy2, gx1, gy2)
             explored_map: (M, M) binary local explored map prediction
             image_frame: image frame visualization
             timestep: time step within the episode

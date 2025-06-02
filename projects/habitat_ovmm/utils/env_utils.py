@@ -27,6 +27,8 @@ def create_ovmm_env_fn(config: "DictConfig") -> HabitatOpenVocabManipEnv:
     :param config: configuration for the environment.
     :return: environment instance.
     """
+    print("___env_utils")
+
     habitat_config = config.habitat
     dataset = make_dataset(habitat_config.dataset.type, config=habitat_config.dataset)
     env_class_name = _get_env_name(config)

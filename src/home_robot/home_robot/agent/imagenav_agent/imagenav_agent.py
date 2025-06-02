@@ -294,6 +294,7 @@ class ImageNavAgent(Agent):
         )
 
         self.visualizer = None
+        config.generate_videos = True
         if config.generate_videos:
             self.visualizer = NavVisualizer(
                 num_sem_categories=config.semantic_map.num_sem_categories,
@@ -355,7 +356,7 @@ class ImageNavAgent(Agent):
                 "last_td_map": obs.task_observations.get("top_down_map"),
             }
             self.visualizer.visualize(**info)
-
+            # print(self.visualizer.visualize(**info))
         return action
 
     @torch.no_grad()

@@ -73,11 +73,13 @@ class OpenVocabManipAgent(ObjectNavAgent):
         self.skip_skills = config.AGENT.skip_skills
         self.max_pick_attempts = 100
         if config.GROUND_TRUTH_SEMANTICS == 0:
+            # print(config)
+
             self.semantic_sensor = OvmmPerception(
                 config,
                 device_id,
                 self.verbose,
-                confidence_threshold=config.AGENT.VISION.confidence_threshold,
+                # confidence_threshold=config.AGENT.VISION.confidence_threshold, #cheon only for use detic
             )
             self.obj_name_to_id, self.rec_name_to_id = read_category_map_file(
                 config.ENVIRONMENT.category_map_file
@@ -167,6 +169,7 @@ class OpenVocabManipAgent(ObjectNavAgent):
         }
         # only the current skill has corresponding value as 1
         info = {**info, **get_skill_as_one_hot_dict(self.states[0].item())}
+        # print(info)
         return info
 
     def reset(self):
@@ -451,6 +454,7 @@ class OpenVocabManipAgent(ObjectNavAgent):
         self, obs: Observations, info: Dict[str, Any]
     ) -> Tuple[DiscreteNavigationAction, Any, Optional[Skill]]:
         """Handle picking policies, either in sim or on the real robot."""
+
         if self.skip_skills.pick:
             action = None
         elif self.config.AGENT.SKILLS.PICK.type == "oracle":
@@ -477,6 +481,8 @@ class OpenVocabManipAgent(ObjectNavAgent):
                     print("pick attempt", pick_step)
                 # If we have not seen an object mask to try to grasp...
                 if not obs.task_observations["prev_grasp_success"]:
+                    print(f"Pick step: {pick_step}")
+                    print(obs.task_observations["prev_grasp_success"])
                     action = DiscreteNavigationAction.PICK_OBJECT
                 else:
                     action = None
@@ -485,9 +491,19 @@ class OpenVocabManipAgent(ObjectNavAgent):
                 f"pick type not supported: {self.config.AGENT.SKILLS.PICK.type}"
             )
         new_state = None
+
+        print(f"Pick type: {self.config.AGENT.SKILLS.PICK.type}")
+        print(f"Pick step: {pick_step}")
+        print(
+            f"Prev grasp success: {obs.task_observations.get('prev_grasp_success', 'N/A')}"
+        )
+
+        #       print(f"Action before return: {action}")
+
         if action in [None, DiscreteNavigationAction.STOP]:
             new_state = Skill.NAV_TO_REC
             action = None
+
         return action, info, new_state
 
     def _nav_to_rec(
@@ -570,21 +586,34 @@ class OpenVocabManipAgent(ObjectNavAgent):
             print("no rwyz", obs.camera_pose[:3, :3])
             roll, pitch, yaw = tra.euler_from_matrix(obs.camera_pose[:3, :3], "rzyx")
             print(f"Roll: {roll}, Pitch: {pitch}, Yaw: {yaw}")
+
         action = None
         while action is None:
             if self.states[0] == Skill.NAV_TO_OBJ:
+                # print("action in NAV_TO_OBJ", action)
                 action, info, new_state = self._nav_to_obj(obs, info)
             elif self.states[0] == Skill.GAZE_AT_OBJ:
+                # print("action in GAZE_AT_OBJ", action)
                 action, info, new_state = self._gaze_at_obj(obs, info)
             elif self.states[0] == Skill.PICK:
+                # print("action in PICK", action)
+                # print("obs : ", obs)
+                # print("")
+                # print("info: ", info)
                 action, info, new_state = self._pick(obs, info)
+                # print(f"new_state : {new_state}")
+
             elif self.states[0] == Skill.NAV_TO_REC:
+                # print("action in NAV_TO_REC", action)
                 action, info, new_state = self._nav_to_rec(obs, info)
             elif self.states[0] == Skill.GAZE_AT_REC:
+                # print("action in GAZE_AT_REC", action)
                 action, info, new_state = self._gaze_at_rec(obs, info)
             elif self.states[0] == Skill.PLACE:
+                # print("action in PLACE", action)
                 action, info, new_state = self._place(obs, info)
             elif self.states[0] == Skill.FALL_WAIT:
+                # print("action in FALL_WAIT", action)
                 action, info, new_state = self._fall_wait(obs, info)
             else:
                 raise ValueError

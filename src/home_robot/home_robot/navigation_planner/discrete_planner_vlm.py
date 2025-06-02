@@ -2,16 +2,21 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+import glob
 import math
 import os
 import shutil
+import socket
 import time
+from io import BytesIO
 from typing import List, Tuple
 
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import skimage.morphology
+from natsort import natsorted
+from PIL import Image
 
 import home_robot.utils.pose as pu
 from home_robot.core.interfaces import (
@@ -44,6 +49,8 @@ class DiscretePlanner:
     This is a wrapper used to navigate to a particular object/goal location.
     """
 
+
+class DiscretePlanner:
     def __init__(
         self,
         turn_angle: float,
@@ -65,7 +72,19 @@ class DiscretePlanner:
         goal_tolerance: float = 0.01,
         discrete_actions: bool = True,
         continuous_angle_tolerance: float = 30.0,
+        llava_host: str = "localhost",  # LLaVA 서버 호스트
+        llava_port: int = 9999,  # LLaVA 서버 포트 (9999로 변경)
     ):
+        # --- 추가 시작 ---
+        self.position_history = []  # 위치 이력 (x, y)
+        self.stuck_threshold = 5  # 정체 판단 타임스텝 임계값 (예: 5단계)
+        self.stuck_counter = 0  # 정체 카운터
+        self.backtrack_mode = False  # 이전 위치로 돌아가는 모드
+        self.backtrack_target = None  # 돌아갈 이전 위치
+        self.llava_direction = None  # LLaVA 서버에서 받은 방향
+        self.llava_host = llava_host  # LLaVA 서버 호스트
+        self.llava_port = llava_port  # LLaVA 서버 포트
+        # --- 추가 끝
         """
         Arguments:
             turn_angle (float): agent turn angle (in degrees)
@@ -138,6 +157,13 @@ class DiscretePlanner:
         self.goal_dilation_selem = skimage.morphology.disk(
             self.goal_dilation_selem_radius
         )
+        # --- 추가 시작 ---
+        self.position_history = [(self.curr_pose[0], self.curr_pose[1])]
+        self.stuck_counter = 0
+        self.backtrack_mode = False
+        self.backtrack_target = None
+        self.llava_direction = None
+        # --- 추가 끝
 
     def set_vis_dir(self, scene_id: str, episode_id: str):
         self.vis_dir = os.path.join(self.default_vis_dir, f"{scene_id}_{episode_id}")
@@ -146,6 +172,113 @@ class DiscretePlanner:
 
     def disable_print_images(self):
         self.print_images = False
+
+    # def get_latest_image(self) -> np.ndarray:
+    #     """vis_dir에서 가장 최근 이미지를 가져옵니다."""
+    #     # vis_dir에서 snapshot_*.png 파일 목록을 가져옴
+    #     image_files = natsorted(glob.glob(os.path.join(self.vis_dir, "snapshot_*.png")))
+    #     if not image_files:
+    #         raise FileNotFoundError(f"No snapshot images found in {self.vis_dir}")
+
+    #     # 가장 최근 파일 (natsorted로 정렬했으므로 마지막 파일)
+    #     latest_image_path = image_files[-1]
+    #     print(f"Using latest image: {latest_image_path}")
+
+    #     # 이미지 로드
+    #     image = cv2.imread(latest_image_path)
+    #     x1 = 50
+    #     y1 = 50
+    #     x2 = 390
+    #     y2 = 520
+    #     cropped_img = image(cv2.img[y1:y2, x1:x2])
+    #     cv2.imwrite(f"/home/intern/cheon/home-robot/cropped.png", cropped_img)
+    #     if cropped_img is None:
+    #         raise ValueError(f"Failed to load image from {latest_image_path}")
+    #     return cropped_img
+    def get_latest_image(self) -> np.ndarray:
+        """vis_dir에서 가장 최근 이미지를 가져옵니다."""
+        # vis_dir에서 snapshot_*.png 파일 목록을 가져옴
+        image_files = natsorted(glob.glob(os.path.join(self.vis_dir, "snapshot_*.png")))
+        if not image_files:
+            raise FileNotFoundError(f"No snapshot images found in {self.vis_dir}")
+
+        # 가장 최근 파일 (natsorted로 정렬했으므로 마지막 파일)
+        latest_image_path = image_files[-1]
+        print(f"Using latest image: {latest_image_path}")
+
+        # 이미지 로드
+        image = cv2.imread(latest_image_path)
+        if image is None:
+            raise ValueError(f"Failed to load image from {latest_image_path}")
+
+        # 크롭 좌표 설정
+        x1 = 50
+        y1 = 50
+        x2 = 390
+        y2 = 520
+
+        # 이미지 크기 확인
+        height, width = image.shape[:2]
+        if x2 > width or y2 > height or x1 < 0 or y1 < 0:
+            raise ValueError(
+                f"Crop coordinates out of bounds: image size ({width}, {height}), crop ([{x1}:{x2}, {y1}:{y2}])"
+            )
+
+        # 이미지 크롭 (NumPy 배열 슬라이싱 사용)
+        cropped_img = image[y1:y2, x1:x2]
+
+        # 크롭된 이미지가 비어 있는지 확인
+        if cropped_img.size == 0:
+            raise ValueError(f"Cropped image is empty: [{x1}:{x2}, {y1}:{y2}]")
+
+        # 크롭된 이미지 저장
+        # cv2.imwrite("/home/intern/cheon/home-robot/cropped.png", cropped_img)
+        # print('save img successfully.')
+        return cropped_img
+
+    def send_image_to_llava(self, image: np.ndarray) -> str:
+        """이미지를 LLaVA 서버로 전송하고 응답을 받습니다."""
+        try:
+            # 이미지를 PNG 형식으로 변환
+            _, buffer = cv2.imencode(".png", image)
+            image_bytes = buffer.tobytes()
+
+            # 소켓 생성
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect((self.llava_host, self.llava_port))
+            print(f"Connected to LLaVA server at {self.llava_host}:{self.llava_port}")
+
+            # 이미지 데이터 전송 (이미지 크기 전송 단계 제거)
+            client_socket.sendall(image_bytes)
+            print(f"Sent image to LLaVA server (size: {len(image_bytes)} bytes)")
+
+            # 클라이언트 소켓 종료 (서버가 데이터 수신 완료를 인식하도록)
+            client_socket.shutdown(socket.SHUT_WR)
+
+            # 서버로부터 응답 수신
+            response = b""
+            while True:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+                response += data
+            response_str = response.decode("utf-8")
+            print(f"Received response from LLaVA server: {response_str}")
+
+            # 소켓 닫기
+            client_socket.close()
+
+            # 응답 처리
+            if response_str == "error":
+                print(
+                    "LLaVA server returned an error. Using default direction: backward"
+                )
+                return "backward"
+            return response_str
+
+        except Exception as e:
+            print(f"Error communicating with LLaVA server: {e}")
+            return "backward"  # 에러 발생 시 기본 방향 반환
 
     def plan(
         self,
@@ -158,61 +291,163 @@ class DiscretePlanner:
         use_dilation_for_stg: bool = False,
         timestep: int = None,
     ) -> Tuple[DiscreteNavigationAction, np.ndarray]:
-        """Plan a low-level action.
-
-        Args:
-            obstacle_map: (M, M) binary local obstacle map prediction
-            goal_map: (M, M) binary array denoting goal location
-            sensor_pose: (7,) array denoting global pose (x, y, o)
-             and local map boundaries planning window (gx1, gx2, gy1, gy2)
-            found_goal: whether we found the object goal category
-
-        Returns:
-            action: low-level action
-            closest_goal_map: (M, M) binary array denoting closest goal
-             location in the goal map in geodesic distance
-        """
-        # Reset timestep using argument; useful when there are timesteps where the discrete planner is not invoked
         if timestep is not None:
             self.timestep = timestep
 
         self.last_pose = self.curr_pose
         obstacle_map = np.rint(obstacle_map)
-
         start_x, start_y, start_o, gx1, gx2, gy1, gy2 = sensor_pose
         gx1, gx2, gy1, gy2 = int(gx1), int(gx2), int(gy1), int(gy2)
         planning_window = [gx1, gx2, gy1, gy2]
-
         start = [
             int(start_y * 100.0 / self.map_resolution - gx1),
             int(start_x * 100.0 / self.map_resolution - gy1),
         ]
         start = pu.threshold_poses(start, obstacle_map.shape)
         start = np.array(start)
-        # Cheon
-        # debug = True
+        self.curr_pose = [start_x, start_y, start_o]
+        self.visited_map[gx1:gx2, gy1:gy2][
+            start[0] : start[0] + 1, start[1] : start[1] + 1
+        ] = 1
+
         if debug:
             print()
             print("--- Planning ---")
             print("Found goal:", found_goal)
             print("Goal points provided:", np.any(goal_map > 0))
 
-        self.curr_pose = [start_x, start_y, start_o]
-        self.visited_map[gx1:gx2, gy1:gy2][
-            start[0] - 0 : start[0] + 1, start[1] - 0 : start[1] + 1
-        ] = 1
+        current_position = (start_x, start_y)
+        self.position_history.append(current_position)
 
-        # Check collisions if we have just moved and are uncertain
+        # 정체 상태 확인: 직전 위치와 현재 위치만 비교
+        debug = True
+        if len(self.position_history) >= 2:  # 최소 2개의 위치가 있어야 비교 가능
+            last_position = self.position_history[-2]
+            current_position = self.position_history[-1]
+            distance_moved = np.linalg.norm(
+                np.array(current_position) - np.array(last_position)
+            )
+            if debug:
+                print(f"Distance moved: {distance_moved:.3f}m (threshold: 0.05m)")
+
+            if distance_moved < 0.05:  # 5cm 미만으로 이동
+                self.stuck_counter += 1
+                if debug:
+                    print(
+                        f"Stuck detected! Counter: {self.stuck_counter}/{self.stuck_threshold}"
+                    )
+            else:
+                if debug and self.stuck_counter > 0:
+                    print(
+                        f"Movement detected, resetting stuck counter from {self.stuck_counter} to 0"
+                    )
+                self.stuck_counter = 0
+
+        # LLaVA 서버에 요청
+        if self.stuck_counter >= self.stuck_threshold and not self.backtrack_mode:
+            if debug:
+                print(
+                    f"Stuck counter reached threshold ({self.stuck_threshold}), contacting LLaVA server..."
+                )
+            # vis_dir에서 가장 최근 이미지 가져오기
+            try:
+                latest_image = self.get_latest_image()
+            except Exception as e:
+                print(f"Error getting latest image: {e}")
+                self.stuck_counter = 0
+                self.backtrack_mode = True
+                backtrack_x = start_x - 2.0 * math.cos(math.radians(start_o))
+                backtrack_y = start_y - 2.0 * math.sin(math.radians(start_o))
+                self.backtrack_target = (backtrack_x, backtrack_y)
+                if debug:
+                    print(f"Reset stuck counter to {self.stuck_counter}")
+                    print(
+                        f"Fallback to backtrack mode due to image error. Target: {self.backtrack_target}"
+                    )
+            else:
+                # LLaVA 서버로 이미지 전송 및 응답 수신
+                self.llava_direction = self.send_image_to_llava(latest_image)
+                print(f"LLaVA suggests moving: {self.llava_direction}")
+
+                # LLaVA 방향에 따라 즉시 동작 결정
+                if self.llava_direction:
+                    self.stuck_counter = 0  # 카운터 초기화
+                    self.backtrack_mode = False  # 백트랙킹 모드 비활성화
+                    # 방향 초기화
+                    if debug:
+                        print(
+                            f"Reset stuck counter to {self.stuck_counter} after LLaVA communication"
+                        )
+                    if self.discrete_actions:
+                        if self.llava_direction.lower() == "left":
+                            return (
+                                DiscreteNavigationAction.TURN_LEFT,
+                                goal_map,
+                                start,
+                                obstacle_map,
+                            )
+                        elif self.llava_direction.lower() == "right":
+                            return (
+                                DiscreteNavigationAction.TURN_RIGHT,
+                                goal_map,
+                                start,
+                                obstacle_map,
+                            )
+                        elif self.llava_direction.lower() == "backward":
+                            angle_rad = math.radians(start_o)
+                            backtrack_x = start_x - 0.5 * math.cos(angle_rad)
+                            backtrack_y = start_y - 0.5 * math.sin(angle_rad)
+                            self.backtrack_target = (backtrack_x, backtrack_y)
+                            self.backtrack_mode = True
+                            return (
+                                DiscreteNavigationAction.TURN_LEFT,
+                                goal_map,
+                                start,
+                                obstacle_map,
+                            )
+                    else:
+                        if self.llava_direction.lower() == "left":
+                            action = ContinuousNavigationAction(
+                                [0, 0, math.radians(self.turn_angle)]
+                            )
+                        elif self.llava_direction.lower() == "right":
+                            action = ContinuousNavigationAction(
+                                [0, 0, -math.radians(self.turn_angle)]
+                            )
+                        elif self.llava_direction.lower() == "backward":
+                            action = ContinuousNavigationAction(
+                                [0, 0, math.radians(180)]
+                            )
+                            self.backtrack_target = (
+                                start_x - 0.5 * math.cos(math.radians(start_o)),
+                                start_y - 0.5 * math.sin(math.radians(start_o)),
+                            )
+                            self.backtrack_mode = True
+                        return action, goal_map, start, obstacle_map
+
         if self.last_action == DiscreteNavigationAction.MOVE_FORWARD or (
             type(self.last_action) == ContinuousNavigationAction
             and np.linalg.norm(self.last_action.xyt[:2]) > 0
         ):
             self._check_collision()
+        debug = False
+        if self.backtrack_mode:
+            backtrack_goal_map = np.zeros_like(goal_map)
+            backtrack_x, backtrack_y = self.backtrack_target
+            backtrack_cell_x = int(backtrack_y * 100.0 / self.map_resolution - gx1)
+            backtrack_cell_y = int(backtrack_x * 100.0 / self.map_resolution - gy1)
+            if debug:
+                print(f"Backtrack Cell: ({backtrack_cell_x}, {backtrack_cell_y})")
+            if (
+                0 <= backtrack_cell_x < goal_map.shape[0]
+                and 0 <= backtrack_cell_y < goal_map.shape[1]
+            ):
+                backtrack_goal_map[backtrack_cell_x, backtrack_cell_y] = 1
+            target_goal_map = backtrack_goal_map
+        else:
+            target_goal_map = goal_map
 
         try:
-            # High-level goal -> short-term goal
-            # Extracts a local waypoint
-            # Defined by the step size - should be relatively close to the robot
             (
                 short_term_goal,
                 closest_goal_map,
@@ -222,7 +457,7 @@ class DiscretePlanner:
                 dilated_obstacles,
             ) = self._get_short_term_goal(
                 obstacle_map,
-                np.copy(goal_map),
+                target_goal_map,
                 start,
                 planning_window,
                 plan_to_dilated_goal=use_dilation_for_stg,
@@ -236,7 +471,25 @@ class DiscretePlanner:
                 (0, 0),
                 np.zeros(goal_map.shape),
             )
-        # Short term goal is in cm, start_x and start_y are in m
+
+        if (
+            self.backtrack_mode
+            and np.linalg.norm(
+                np.array([start_x, start_y]) - np.array([backtrack_x, backtrack_y])
+            )
+            < 0.2
+        ):
+            self.backtrack_mode = False
+            self.backtrack_target = None
+            stuck_x, stuck_y = self.position_history[-1]
+            stuck_cell_x = int(stuck_x * 100.0 / self.map_resolution - gx1)
+            stuck_cell_y = int(stuck_y * 100.0 / self.map_resolution - gy1)
+            self.collision_map[
+                stuck_cell_x - 1 : stuck_cell_x + 2, stuck_cell_y - 1 : stuck_cell_y + 2
+            ] = 1
+            if debug:
+                print("Backtrack completed. Added stuck point to collision map.")
+
         if debug:
             print("Current pose:", start)
             print("Short term goal:", short_term_goal)
@@ -253,14 +506,9 @@ class DiscretePlanner:
                 dist_to_short_term_goal * self.map_resolution * CM_TO_METERS,
             )
             print("Replan:", replan)
-        # t1 = time.time()
-        # print(f"[Planning] get_short_term_goal() time: {t1 - t0}")
 
-        # We were not able to find a path to the high-level goal
         if replan and not stop:
-            # Clean collision map
             self.collision_map *= 0
-            # Reduce obstacle dilation
             if self.curr_obs_dilation_selem_radius > self.min_obs_dilation_selem_radius:
                 self.curr_obs_dilation_selem_radius -= 1
                 self.obs_dilation_selem = skimage.morphology.disk(
@@ -270,7 +518,6 @@ class DiscretePlanner:
                     print(
                         f"reduced obs dilation to {self.curr_obs_dilation_selem_radius}"
                     )
-
             if found_goal:
                 if debug:
                     print(
@@ -296,8 +543,6 @@ class DiscretePlanner:
                 found_goal = False
                 if replan:
                     print("Nowhere left to explore. Stopping.")
-                    # Calling the STOP action here will cause the agent to try grasping
-                    #  TODO separate out STOP_SUCCESS and STOP_FAILURE actions
                     return (
                         DiscreteNavigationAction.STOP,
                         closest_goal_map,
@@ -305,37 +550,26 @@ class DiscretePlanner:
                         dilated_obstacles,
                     )
 
-        # Normalize agent angle
         angle_agent = pu.normalize_angle(start_o)
-
-        # If we found a short term goal worth moving towards...
         stg_x, stg_y = short_term_goal
         relative_stg_x, relative_stg_y = stg_x - start[0], stg_y - start[1]
         angle_st_goal = math.degrees(math.atan2(relative_stg_x, relative_stg_y))
         relative_angle_to_stg = pu.normalize_angle(angle_agent - angle_st_goal)
-
-        # Compute angle to the final goal
         goal_x, goal_y = closest_goal_pt
         angle_goal = math.degrees(math.atan2(goal_x - start[0], goal_y - start[1]))
         relative_angle_to_closest_goal = pu.normalize_angle(angle_agent - angle_goal)
 
         if debug:
-            # Actual metric distance to goal
             distance_to_goal = np.linalg.norm(np.array([goal_x, goal_y]) - start)
             distance_to_goal_cm = distance_to_goal * self.map_resolution
-            # Display information
             print("-----------------")
             print("Found reachable goal:", found_goal)
             print("Stop:", stop)
             print("Angle to goal:", relative_angle_to_closest_goal)
             print("Distance to goal", distance_to_goal)
             print(
-                "Distance in cm:",
-                distance_to_goal_cm,
-                ">",
-                self.min_goal_distance_cm,
+                "Distance in cm:", distance_to_goal_cm, ">", self.min_goal_distance_cm
             )
-
             m_relative_stg_x, m_relative_stg_y = [
                 CM_TO_METERS * self.map_resolution * d
                 for d in [relative_stg_x, relative_stg_y]
@@ -355,11 +589,10 @@ class DiscretePlanner:
             relative_angle_to_stg,
             relative_angle_to_closest_goal,
             start_o,
-            found_goal,
-            stop,
+            found_goal and not self.backtrack_mode,
+            stop and not self.backtrack_mode,
             debug,
         )
-
         self.last_action = action
         return action, closest_goal_map, short_term_goal, dilated_obstacles
 

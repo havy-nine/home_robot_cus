@@ -159,16 +159,8 @@ class Visualizer:
     def set_vis_dir(self, scene_id: str, episode_id: str):
         self.print_images = True
         self.vis_dir = os.path.join(self.default_vis_dir, f"{scene_id}")
-        print(f" vis_dir  :  {self.vis_dir}")
-        self.episode_id = episode_id
-        # print(f"current_scene_id: {scene_id}")
-        # print(f"current episode_id: {episode_id}")
-        # shutil.rmtree(self.vis_dir, ignore_errors=True)
-        os.makedirs(self.vis_dir, exist_ok=True)
-
-    def rm_folder(self, scene_id: str):
         shutil.rmtree(self.vis_dir, ignore_errors=True)
-        print(self.vis_dir)
+        os.makedirs(self.vis_dir, exist_ok=True)
 
     def disable_print_images(self):
         self.print_images = False
@@ -273,7 +265,6 @@ class Visualizer:
         instance_map: Optional[np.ndarray] = None,
         instance_memory: Optional[InstanceMemory] = None,
         goal_pose=None,
-        episode_id=None,
         **kwargs,
     ):
         """Visualize frame input and semantic map.
@@ -369,7 +360,7 @@ class Visualizer:
 
             obstacle_mask = np.rint(obstacle_map) == 1
             explored_mask = np.rint(explored_map) == 1
-            visited_mask = self.visited_map_vis[gy1:gy2, gx1:gx2] = 1
+            visited_mask = self.visited_map_vis[gy1:gy2, gx1:gx2] == 1
             semantic_map[no_category_mask] = PI.EMPTY_SPACE
             semantic_map[np.logical_and(no_category_mask, explored_mask)] = PI.EXPLORED
             semantic_map[np.logical_and(no_category_mask, obstacle_mask)] = PI.OBSTACLES
@@ -462,25 +453,84 @@ class Visualizer:
         if instance_memory is not None:
             image_vis = self._visualize_instance_counts(image_vis, instance_memory)
 
-        # Save only first-person RGB frame
-        if self.print_images and semantic_frame is not None:
-            # Create subfolder for first-person RGB
-            first_person_rgb_folder = os.path.join(self.vis_dir, "first_person_rgb")
-            os.makedirs(first_person_rgb_folder, exist_ok=True)
+        # Save individual components to separate subfolders
+        if self.print_images:
+            # Create subfolders
+            subfolders = {
+                "first_person_rgb": os.path.join(self.vis_dir, "first_person_rgb"),
+                "first_person_semantic": os.path.join(
+                    self.vis_dir, "first_person_semantic"
+                ),
+                "top_down_map": os.path.join(self.vis_dir, "top_down_map"),
+                "third_person": os.path.join(self.vis_dir, "third_person"),
+            }
+            for subfolder in subfolders.values():
+                os.makedirs(subfolder, exist_ok=True)
+
+            # Function to save a component image
+            def save_component(component_data, folder, filename):
+                if component_data is not None and component_data.size > 0:
+                    cv2.imwrite(os.path.join(folder, filename), component_data)
 
             # Save first-person RGB frame
-            first_person_rgb = image_vis[V.Y1 : V.Y2, V.FIRST_RGB_X1 : V.FIRST_RGB_X2]
-            if first_person_rgb.size > 0:
-                cv2.imwrite(
-                    os.path.join(
-                        first_person_rgb_folder, f"{self.episode_id}_{timestep:03d}.png"
-                    ),
+            if semantic_frame is not None:
+                first_person_rgb = image_vis[
+                    V.Y1 : V.Y2, V.FIRST_RGB_X1 : V.FIRST_RGB_X2
+                ]
+                save_component(
                     first_person_rgb,
+                    subfolders["first_person_rgb"],
+                    f"first_person_rgb_{timestep:03d}.png",
+                )
+
+            # Save first-person semantic frame
+            if semantic_frame is not None and semantic_frame.shape[2] > 3:
+                first_person_semantic = image_vis[
+                    V.Y1 : V.Y2, V.FIRST_SEM_X1 : V.FIRST_SEM_X2
+                ]
+                save_component(
+                    first_person_semantic,
+                    subfolders["first_person_semantic"],
+                    f"first_person_semantic_{timestep:03d}.png",
+                )
+
+            # Save top-down semantic map
+            if obstacle_map is not None:
+                top_down_map = image_vis[V.Y1 : V.Y2, V.TOP_DOWN_X1 : V.TOP_DOWN_X2]
+                save_component(
+                    top_down_map,
+                    subfolders["top_down_map"],
+                    f"top_down_map_{timestep:03d}.png",
+                )
+
+            # Save third-person or RL frame
+            if self.show_rl_obs and rl_obs_frame is not None:
+                third_person = image_vis[
+                    V.Y1 : V.Y2, V.TOP_DOWN_X1 : V.TOP_DOWN_X1 + width
+                ]
+                save_component(
+                    third_person,
+                    subfolders["third_person"],
+                    f"third_person_{timestep:03d}.png",
+                )
+            elif third_person_image is not None:
+                third_person = image_vis[
+                    V.Y1 : V.Y2, V.THIRD_PERSON_X1 : V.THIRD_PERSON_X2
+                ]
+                save_component(
+                    third_person,
+                    subfolders["third_person"],
+                    f"third_person_{timestep:03d}.png",
                 )
 
         if self.show_images:
             cv2.imshow("Visualization", image_vis)
             cv2.waitKey(1)
+        if self.print_images:
+            cv2.imwrite(
+                os.path.join(self.vis_dir, "snapshot_{:03d}.png".format(timestep)),
+                image_vis,
+            )
 
     def _visualize_semantic_frame(
         self, image_vis: np.ndarray, semantic_frame: np.ndarray, palette: List

@@ -107,8 +107,8 @@ def get_summary(args: argparse.Namespace, exclude_substr: str = "viz"):
         # Exclude the `exp_names` having `exclude_substr` in their names
         print(args.folder_name)
         # cheon
-        if args.folder_name == "datadump_detic/results/eval_hssd/":  # cheon
-            # if args.folder_name == "datadump_sam/results/eval_hssd_sam/":
+        # if args.folder_name == "datadump_detic/results/eval_hssd/": #cheon
+        if args.folder_name == "datadump_sam/results/eval_hssd_sam/":
             episode_metrics = get_metrics_from_jsons(args.folder_name, "")
             stats = get_stats_from_episode_metrics(episode_metrics)
             results_dfs[exp_name] = stats
@@ -151,10 +151,10 @@ def main():
     # Parse arguments to read folder_name and exp_name
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        # "--folder_name", type=str, default="datadump_detic/results/eval_hssd/"
         "--folder_name",
         type=str,
-        default="datadump_detic/results/eval_hssd/"
-        # "--folder_name", type=str, default="datadump_sam/results/eval_hssd_sam/"
+        default="datadump_sam/results/eval_hssd_sam/",
     )
     parser.add_argument("--exp_name", type=str, default=None)
     args = parser.parse_args()

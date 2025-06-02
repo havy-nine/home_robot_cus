@@ -83,7 +83,7 @@ if __name__ == "__main__":
     agent.planner.set_vis_dir(scene_id, env.habitat_env.current_episode.episode_id)
 
     t = 0
-
+    # print("dsafjlkjdklafsj eval_episode.py")
     while not env.episode_over:
         t += 1
         print(t)

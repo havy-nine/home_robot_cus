@@ -56,7 +56,9 @@ def create_env_config(
     env_config = DictConfig({**habitat_config, **env_config})
 
     visualize = env_config.VISUALIZE or env_config.PRINT_IMAGES
+    print(f"projects/habitat_ovmm/utils/config_utils.py, visualize : {visualize}")
     if not visualize:
+
         if "third_rgb" in env_config.habitat.gym.obs_keys:
             env_config.habitat.gym.obs_keys.remove("third_rgb")
         if (

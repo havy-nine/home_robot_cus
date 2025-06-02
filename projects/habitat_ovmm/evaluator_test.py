@@ -14,6 +14,7 @@ import pandas as pd
 from habitat_baselines.rl.ppo.ppo_trainer import PPOTrainer
 from habitat_baselines.utils.info_dict import extract_scalars_from_info
 from omegaconf import DictConfig
+from PIL import Image
 from tqdm import tqdm
 from utils.env_utils import create_ovmm_env_fn
 from utils.metrics_utils import get_stats_from_episode_metrics
@@ -35,168 +36,130 @@ class EvaluationType(Enum):
 
 
 class OVMMEvaluator(PPOTrainer):
-    """Class for creating vectorized environments, evaluating OpenVocabManipAgent on an episode dataset and returning metrics."""
-
     def __init__(self, eval_config: DictConfig, data_dir=None) -> None:
         self.metrics_save_freq = eval_config.EVAL_VECTORIZED.metrics_save_freq
         self.results_dir = os.path.join(
             eval_config.DUMP_LOCATION, "results", eval_config.EXP_NAME
         )
-        # Cheon
         self.videos_dir = os.path.join(eval_config.DUMP_LOCATION, "video")
-        # self.videos_dir = eval_config.habitat_baselines.video_dir
-        # print(f"projects/habitat_ovmm/evaluator.py, video_dir :{self.videos_dir}")
         self.data_dir = data_dir
         if self.data_dir:
             os.makedirs(self.data_dir, exist_ok=True)
         os.makedirs(self.results_dir, exist_ok=True)
         os.makedirs(self.videos_dir, exist_ok=True)
+        self.current_scene = None  # 장면 전환 감지를 위한 변수
 
         super().__init__(eval_config)
 
-    def local_evaluate_vectorized(self, agent, num_episodes_per_env=10):
-        self._init_envs(
-            config=self.config, is_eval=True, make_env_fn=create_ovmm_env_fn
+    def save_first_person_image(
+        self, scene_id: str, episode_id: str, image: np.ndarray, step: int = 0
+    ) -> None:
+        """Save first_person_image to scene-specific folder."""
+        if self.data_dir is None:
+            return
+        scene_folder = os.path.join(
+            self.data_dir, f"scene_{scene_id.split('/')[-1].split('.')[0]}"
         )
+        os.makedirs(scene_folder, exist_ok=True)
+        image_path = os.path.join(scene_folder, f"episode_{episode_id}_step_{step}.png")
+        Image.fromarray(image).save(image_path)
+        print(f"Saved first_person_image to {image_path}")
 
-        self._evaluate_vectorized(
-            agent,
-            self.envs,
-            num_episodes_per_env=num_episodes_per_env,
-        )
-
-    def _summarize_metrics(self, episode_metrics: Dict) -> Dict:
-        """Gets stats from episode metrics"""
-        # convert to a dataframe
-        episode_metrics_df = pd.DataFrame.from_dict(episode_metrics, orient="index")
-        episode_metrics_df["start_idx"] = 0
-        stats = get_stats_from_episode_metrics(episode_metrics_df)
-        return stats
-
-    def _print_summary(self, summary: dict):
-        """Prints the summary of metrics"""
-        print("=" * 50)
-        print("Averaged metrics")
-        print("=" * 50)
-        for k, v in summary.items():
-            print(f"{k}: {v}")
-        print("=" * 50)
-
-    def _check_set_planner_vis_dir(
-        self, agent: "Agent", current_episode: "BaseEpisode"
-    ):
-        """
-        Sets vis_dir for storing planner's debug visualisations if the agent has a planner.
-        """
-        if hasattr(agent, "planner"):
-            agent.planner.set_vis_dir(
-                current_episode.scene_id.split("/")[-1].split(".")[0],
-                current_episode.episode_id,
-            )
-
-    def _evaluate_vectorized(
-        self,
-        agent: "OpenVocabManipAgent",
-        envs: "VectorEnv",
-        num_episodes_per_env=None,
-    ):
-        # The stopping condition is either specified through
-        # num_episodes_per_env (stop after each environment
-        # finishes a certain number of episodes)
-        print(f"Running eval on {envs.number_of_episodes} episodes")
-
-        if num_episodes_per_env is None:
-            num_episodes_per_env = envs.number_of_episodes
+    def local_evaluate(
+        self, agent: "Agent", num_episodes: Optional[int] = None
+    ) -> Dict[str, float]:
+        env_num_episodes = self._env.number_of_episodes
+        if num_episodes is None:
+            num_episodes = env_num_episodes
         else:
-            num_episodes_per_env = [num_episodes_per_env] * envs.num_envs
-
-        episode_metrics = {}
-
-        def stop():
-            return all(
-                [
-                    episode_idxs[i] >= num_episodes_per_env[i]
-                    for i in range(envs.num_envs)
-                ]
+            assert num_episodes <= env_num_episodes, (
+                "num_episodes({}) is larger than number of episodes "
+                "in environment ({})".format(num_episodes, env_num_episodes)
             )
 
-        start_time = time.time()
-        episode_idxs = [0] * envs.num_envs
-        obs = envs.call(["reset"] * envs.num_envs)
+        assert num_episodes > 0, "num_episodes should be greater than 0"
 
-        agent.reset_vectorized()
-        self._check_set_planner_vis_dir(agent, self.envs.current_episodes()[0])
-        print(f"_check_set_planner_vis_dir : {_check_set_planner_vis_dir}")
+        episode_metrics: Dict = {}
+        episode_key_order: list = []
+        count_episodes: int = 0
 
-        while not stop():
-            current_episodes_info = self.envs.current_episodes()
-            print(f"current_episodes_info : {current_episodes_info}")
-            # TODO: Currently agent can work with only 1 env, Parallelize act across envs
-            actions, infos, _ = zip(*[agent.act(ob) for ob in obs])
+        pbar = tqdm(total=num_episodes)
+        while count_episodes < num_episodes:
+            observations, done = self._env.reset(), False
+            current_episode = self._env.get_current_episode()
+            agent.reset()
+            self._check_set_planner_vis_dir(agent, current_episode)
 
-            outputs = envs.call(
-                ["apply_action"] * envs.num_envs,
-                [{"action": a, "info": i} for a, i in zip(actions, infos)],
+            # 장면 전환 감지
+            scene_id = current_episode.scene_id
+            if scene_id != self.current_scene:
+                print(f"Scene changed to {scene_id.split('/')[-1].split('.')[0]}")
+                self.current_scene = scene_id
+
+            current_episode_key = (
+                f"{scene_id.split('/')[-1].split('.')[0]}_"
+                f"{current_episode.episode_id}"
             )
+            episode_key_order.append(current_episode_key)
+            current_episode_metrics = {}
 
-            obs, dones, hab_infos = [list(x) for x in zip(*outputs)]
-            for e, (done, info, hab_info) in enumerate(zip(dones, infos, hab_infos)):
-                # print('projects/habitat_ovmm/evaluator.py : test ')
-                episode_key = (
-                    f"{current_episodes_info[e].scene_id.split('/')[-1].split('.')[0]}_"
-                    f"{current_episodes_info[e].episode_id}"
+            # 초기 first_person_image 저장
+            if "rgb" in observations:
+                self.save_first_person_image(
+                    scene_id, current_episode.episode_id, observations["rgb"], step=0
                 )
-                if episode_key not in episode_metrics:
-                    episode_metrics[episode_key] = {}
-                # Record metrics after each skill finishes. This is useful for debugging.
+
+            step = 1  # 스텝 카운터
+            while not done:
+                action, info, _ = agent.act(observations)
+                observations, done, hab_info = self._env.apply_action(action, info)
+                # 매 스텝마다 first_person_image 저장
+                if "rgb" in observations:
+                    self.save_first_person_image(
+                        scene_id,
+                        current_episode.episode_id,
+                        observations["rgb"],
+                        step=step,
+                    )
+                step += 1
+
                 if "skill_done" in info and info["skill_done"] != "":
                     metrics = extract_scalars_from_info(hab_info)
                     metrics_at_skill_end = {
                         f"{info['skill_done']}." + k: v for k, v in metrics.items()
                     }
-                    episode_metrics[episode_key] = {
+                    current_episode_metrics = {
                         **metrics_at_skill_end,
-                        **episode_metrics[episode_key],
+                        **current_episode_metrics,
                     }
-                    if "goal_name" in episode_metrics[episode_key]:
-                        episode_metrics[episode_key]["goal_name"] = info["goal_name"]
-                if done:  # environment times out
-                    metrics = extract_scalars_from_info(hab_info)
-                    if episode_idxs[e] < num_episodes_per_env[e]:
-                        metrics_at_episode_end = {
-                            f"END." + k: v for k, v in metrics.items()
-                        }
-                        episode_metrics[episode_key] = {
-                            **metrics_at_episode_end,
-                            **episode_metrics[episode_key],
-                        }
-                        if "goal_name" in episode_metrics[episode_key]:
-                            episode_metrics[episode_key]["goal_name"] = info[
-                                "goal_name"
-                            ]
-                        episode_idxs[e] += 1
-                        print(
-                            f"Episode indexes {episode_idxs[e]} / {num_episodes_per_env[e]} "
-                            f"after {round(time.time() - start_time, 2)} seconds"
-                        )
-                    if len(episode_metrics) % self.metrics_save_freq == 0:
-                        aggregated_metrics = self._aggregate_metrics(episode_metrics)
-                        self._write_results(episode_metrics, aggregated_metrics)
-                    if not stop():
-                        obs[e] = envs.call_at(e, "reset")
-                        agent.reset_vectorized_for_env(e)
-                        self._check_set_planner_vis_dir(
-                            envs, envs.current_episodes()[e]
-                        )
+                    if "goal_name" in info:
+                        current_episode_metrics["goal_name"] = info["goal_name"]
 
-        envs.close()
+            metrics = extract_scalars_from_info(hab_info)
+            metrics_at_episode_end = {"END." + k: v for k, v in metrics.items()}
+            current_episode_metrics = {
+                **metrics_at_episode_end,
+                **current_episode_metrics,
+            }
+            if "goal_name" in info:
+                current_episode_metrics["goal_name"] = info["goal_name"]
+
+            episode_metrics[current_episode_key] = current_episode_metrics
+            if len(episode_metrics) % self.metrics_save_freq == 0:
+                aggregated_metrics = self._aggregate_metrics(episode_metrics)
+                self._write_results(episode_metrics, aggregated_metrics)
+
+            count_episodes += 1
+            pbar.update(1)
+
+        self._env.close()
 
         aggregated_metrics = self._aggregate_metrics(episode_metrics)
         self._write_results(episode_metrics, aggregated_metrics)
 
         average_metrics = self._summarize_metrics(episode_metrics)
         self._print_summary(average_metrics)
-
+        print(episode_key_order)
         return average_metrics
 
     def _aggregate_metrics(self, episode_metrics: Dict[str, Any]) -> Dict[str, float]:
@@ -268,26 +231,11 @@ class OVMMEvaluator(PPOTrainer):
         print(f"_env.number_of_episodes: {env_num_episodes}")
         count_episodes: int = 0
 
-        prev_scene = None
         pbar = tqdm(total=num_episodes)
         # print("In Evaluator, num_episodes: ", num_episodes)
-
         while count_episodes < num_episodes:
             observations, done = self._env.reset(), False
             current_episode = self._env.get_current_episode()
-
-            scene_id = current_episode.scene_id
-            if scene_id != prev_scene:
-
-                if prev_scene != None:
-                    print(f"Scene changed to {scene_id.split('/')[-1].split('.')[0]}")
-                    # prev_scene =
-                    print(prev_scene.split("/")[-1].split(".")[0])
-                    self._env.rm_folder(prev_scene.split("/")[-1].split(".")[0])
-                prev_scene = scene_id
-
-            # print(f'test.scene_id: {scene_id}')
-
             agent.reset()
             self._check_set_planner_vis_dir(agent, current_episode)
 
@@ -296,7 +244,6 @@ class OVMMEvaluator(PPOTrainer):
                 f"{current_episode.episode_id}"
             )
             print(f"in projects/habitat_ovmm/evaluator.py, {current_episode_key}")
-
             episode_key_order.append(current_episode_key)
             current_episode_metrics = {}
             obs_data = [observations]
@@ -350,7 +297,7 @@ class OVMMEvaluator(PPOTrainer):
 
         average_metrics = self._summarize_metrics(episode_metrics)
         self._print_summary(average_metrics)
-        # print(episode_key_order)
+        print(episode_key_order)
         return average_metrics
 
     def remote_evaluate(
@@ -417,7 +364,7 @@ class OVMMEvaluator(PPOTrainer):
         episode_metrics: Dict = {}
 
         count_episodes: int = 0
-        print("projects/habitat_ovmm/evaluator.py")
+
         pbar = tqdm(total=num_episodes)
         while count_episodes < num_episodes:
             observations, done = (
@@ -508,9 +455,7 @@ class OVMMEvaluator(PPOTrainer):
             print("1")
             self._env = create_ovmm_env_fn(self.config)
             print(f"print(self._env) : {self._env}")
-
             return self.local_evaluate(agent, num_episodes)
-
         elif evaluation_type == EvaluationType.LOCAL_VECTORIZED.value:
             print("2")
             self._env = create_ovmm_env_fn(self.config)

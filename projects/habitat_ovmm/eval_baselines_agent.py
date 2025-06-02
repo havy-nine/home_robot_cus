@@ -42,12 +42,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--baseline_config_path",
         type=str,
+        # default="projects/habitat_ovmm/configs/agent/heuristic_agent_w_sam.yaml",
         default="projects/habitat_ovmm/configs/agent/heuristic_agent.yaml",
         help="Path to config yaml",
     )
     parser.add_argument(
         "--env_config_path",
         type=str,
+        # default="projects/habitat_ovmm/configs/env/hssd_eval_sam.yaml",
         default="projects/habitat_ovmm/configs/env/hssd_eval.yaml",
         help="Path to config yaml",
     )
@@ -96,24 +98,34 @@ if __name__ == "__main__":
 
     # merge env config and baseline config to create agent config
     agent_config = create_agent_config(env_config, baseline_config)
-
+    # print(env_config) #cheon
     device_id = env_config.habitat.simulator.habitat_sim_v0.gpu_device_id
-
+    # device_id
+    device_id = 0
+    print("device id : ", device_id)
     # create agent
+    print(f"args.agent_type : {args.agent_type}")
     if args.agent_type == "random":
         agent = RandomAgent(agent_config, device_id=device_id)
     elif args.agent_type == "explore":
         agent = OVMMExplorationAgent(agent_config, device_id=device_id, args=args)
     else:
+        # print('else')
         agent = OpenVocabManipAgent(agent_config, device_id=device_id)
 
     # create evaluator
     evaluator = OVMMEvaluator(env_config, data_dir=args.data_dir)
-
+    print(
+        f"in projects habitat_ovmm/ eval_baselines_agent.py, data_dir : {args.data_dir}"
+    )
     # evaluate agent
+    # print(f"num_episiodes :{args.num_episodes}")
+
+    # args.num_episodes = 90
+
     metrics = evaluator.evaluate(
         agent=agent,
         evaluation_type=args.evaluation_type,
         num_episodes=args.num_episodes,
     )
-    print("Metrics:\n", metrics)
+    # print("Metrics:\n", metrics)

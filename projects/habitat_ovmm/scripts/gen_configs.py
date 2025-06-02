@@ -18,6 +18,7 @@ def gen_all_configs(base_config_path: str, save_folder: str) -> None:
     base_config = yaml.safe_load(open(base_config_path, "r"))
     timestamp = time.strftime("%m%d-%h%m%s")
     os.makedirs(save_folder, exist_ok=True)
+    print(base_config)
     # loop over all possible choices of: viz/no_viz, heuristic/rl nav, heuristic/rl manip, GT/DETIC perception
     for viz in ["viz", "no_viz"]:
         for manip in ["heuristic", "rl"]:
@@ -82,7 +83,8 @@ if __name__ == "__main__":
         "--base-config-path",
         type=str,
         help="path to base config",
-        default="projects/habitat_ovmm/configs/agent/hssd_eval.yaml",
+        # default="projects/habitat_ovmm/configs/agent/hssd_eval.yaml",
+        default="projects/habitat_ovmm/configs/agent/heuristic_agent.yaml",
     )
     parser.add_argument(
         "--save-folder",

@@ -158,17 +158,9 @@ class Visualizer:
 
     def set_vis_dir(self, scene_id: str, episode_id: str):
         self.print_images = True
-        self.vis_dir = os.path.join(self.default_vis_dir, f"{scene_id}")
-        print(f" vis_dir  :  {self.vis_dir}")
-        self.episode_id = episode_id
-        # print(f"current_scene_id: {scene_id}")
-        # print(f"current episode_id: {episode_id}")
-        # shutil.rmtree(self.vis_dir, ignore_errors=True)
-        os.makedirs(self.vis_dir, exist_ok=True)
-
-    def rm_folder(self, scene_id: str):
+        self.vis_dir = os.path.join(self.default_vis_dir, f"{scene_id}_{episode_id}")
         shutil.rmtree(self.vis_dir, ignore_errors=True)
-        print(self.vis_dir)
+        os.makedirs(self.vis_dir, exist_ok=True)
 
     def disable_print_images(self):
         self.print_images = False
@@ -273,7 +265,6 @@ class Visualizer:
         instance_map: Optional[np.ndarray] = None,
         instance_memory: Optional[InstanceMemory] = None,
         goal_pose=None,
-        episode_id=None,
         **kwargs,
     ):
         """Visualize frame input and semantic map.
@@ -369,13 +360,14 @@ class Visualizer:
 
             obstacle_mask = np.rint(obstacle_map) == 1
             explored_mask = np.rint(explored_map) == 1
-            visited_mask = self.visited_map_vis[gy1:gy2, gx1:gx2] = 1
+            visited_mask = self.visited_map_vis[gy1:gy2, gx1:gx2] == 1
             semantic_map[no_category_mask] = PI.EMPTY_SPACE
             semantic_map[np.logical_and(no_category_mask, explored_mask)] = PI.EXPLORED
             semantic_map[np.logical_and(no_category_mask, obstacle_mask)] = PI.OBSTACLES
             semantic_map[visited_mask] = PI.VISITED
 
             # Goal
+
             if visualize_goal:
                 selem = skimage.morphology.disk(4)
                 goal_mat = 1 - skimage.morphology.binary_dilation(goal_map, selem) != 1
@@ -391,11 +383,13 @@ class Visualizer:
 
                 if short_term_goal is not None:
                     short_term_goal_mask = np.zeros(goal_mask.shape)
+
                     try:
                         short_term_goal_mask[short_term_goal[0], short_term_goal[1]] = 1
                     except Exception as e:
                         print(f"Error occurred: {e}")
                         print(short_term_goal_mask[479, short_term_goal[1]])
+
                         short_term_goal_mask[479, short_term_goal[1]] = 1
                     short_term_goal_mask = (
                         1
@@ -461,26 +455,17 @@ class Visualizer:
             )
         if instance_memory is not None:
             image_vis = self._visualize_instance_counts(image_vis, instance_memory)
-
-        # Save only first-person RGB frame
-        if self.print_images and semantic_frame is not None:
-            # Create subfolder for first-person RGB
-            first_person_rgb_folder = os.path.join(self.vis_dir, "first_person_rgb")
-            os.makedirs(first_person_rgb_folder, exist_ok=True)
-
-            # Save first-person RGB frame
-            first_person_rgb = image_vis[V.Y1 : V.Y2, V.FIRST_RGB_X1 : V.FIRST_RGB_X2]
-            if first_person_rgb.size > 0:
-                cv2.imwrite(
-                    os.path.join(
-                        first_person_rgb_folder, f"{self.episode_id}_{timestep:03d}.png"
-                    ),
-                    first_person_rgb,
-                )
-
         if self.show_images:
             cv2.imshow("Visualization", image_vis)
             cv2.waitKey(1)
+        if self.print_images:
+            cv2.imwrite(
+                os.path.join(self.vis_dir, "snapshot_{:03d}.png".format(timestep)),
+                image_vis,
+            )
+            print(
+                "src/home_robot_sim/home_robot_sim/env/habitat_objectnav_env/visualizer.py"
+            )
 
     def _visualize_semantic_frame(
         self, image_vis: np.ndarray, semantic_frame: np.ndarray, palette: List
@@ -525,7 +510,7 @@ class Visualizer:
 
         Returns:
             image_vis (np.ndarray): The image panel after adding instances
-        """
+        '"""
         num_instances_per_category = defaultdict(int)
         num_views_per_instance = defaultdict(list)
         for instance_id, instance in instance_memory.instances[0].items():

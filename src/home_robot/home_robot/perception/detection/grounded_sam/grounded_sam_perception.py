@@ -37,8 +37,8 @@ GROUNDING_DINO_CHECKPOINT_PATH = str(
     PARENT_DIR / "checkpoints" / "groundingdino_swint_ogc.pth"
 )
 MOBILE_SAM_CHECKPOINT_PATH = str(PARENT_DIR / "checkpoints" / "mobile_sam.pt")
-BOX_THRESHOLD = 0.25
-TEXT_THRESHOLD = 0.25
+BOX_THRESHOLD = 0.5
+TEXT_THRESHOLD = 0.5
 NMS_THRESHOLD = 0.8
 
 
@@ -52,8 +52,11 @@ class GroundedSAMPerception(PerceptionModule):
         verbose=False,
         nms_threshold: float = NMS_THRESHOLD,
         box_threshold: float = BOX_THRESHOLD,
-        text_threshold: float = None,
+        text_threshold: float = TEXT_THRESHOLD,  # cheon
     ):
+        print(nms_threshold)
+        print(box_threshold)
+        print(text_threshold)
         """Load trained Detic model for inference.
 
         Arguments:
@@ -132,6 +135,7 @@ class GroundedSAMPerception(PerceptionModule):
             box_threshold=self.box_threshold,
             text_threshold=self.text_threshold,
         )
+        # print(f"In grounded_sam_perception.py: {detections}")
 
         # NMS post process
         # print(f"Before NMS: {len(detections.xyxy)} boxes")
@@ -148,6 +152,11 @@ class GroundedSAMPerception(PerceptionModule):
         detections.xyxy = detections.xyxy[nms_idx]
         detections.confidence = detections.confidence[nms_idx]
         detections.class_id = detections.class_id[nms_idx]
+        # cheon
+        # print('In grounded_sam_perception.py')
+        # print(detections.xyxy)
+        # print(detections.confidence)
+        # print(detections.class_id)
 
         # convert detections to masks
         detections.mask = self.segment(image=image, xyxy=detections.xyxy)

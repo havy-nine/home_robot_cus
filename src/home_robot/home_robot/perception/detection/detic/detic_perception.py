@@ -155,7 +155,8 @@ class DeticPerception(PerceptionModule):
                 39: 14,  # bottle
             }
         self.num_sem_categories = len(self.categories_mapping)
-
+        print("In detic_perception.py: ", self.categories_mapping)
+        print("gpu_id", sem_gpu_id)
         num_classes = len(self.metadata.thing_classes)
         self.cpu_device = torch.device("cpu")
         self.instance_mode = ColorMode.IMAGE

@@ -66,6 +66,7 @@ class HabitatOpenVocabManipEnv(HabitatEnv):
 
         self.episodes_data_path = config.habitat.dataset.data_path
         self.video_dir = config.habitat_baselines.video_dir
+
         self.max_forward = (
             config.habitat.task.actions.base_velocity.max_displacement_along_axis
         )
@@ -109,7 +110,13 @@ class HabitatOpenVocabManipEnv(HabitatEnv):
     def set_vis_dir(self):
         scene_id = self.get_current_episode().scene_id.split("/")[-1].split(".")[0]
         episode_id = self.get_current_episode().episode_id
+
         self.visualizer.set_vis_dir(scene_id=scene_id, episode_id=episode_id)
+
+    def rm_folder(self):
+        scene_id = self.get_current_episode().scene_id.split("/")[-1].split(".")[0]
+
+        self.visualizer.rm_folder(scene_id=scene_id)
 
     def reset(self):
         habitat_obs = self.habitat_env.reset()

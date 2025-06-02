@@ -268,6 +268,9 @@ class NavVisualizer:
         nframes = 1 if metrics is None else 5
         for i in range(nframes):
             name = f"snapshot_{timestep}_{i}.png"
+            print(
+                f"in home-robot/agent/imagenav_agent/visualizer.py, sanptshot_name : {name}"
+            )
             cv2.imwrite(os.path.join(self.vis_dir, name), frame)
 
     def pad_frame(self, frame: np.ndarray, width: int) -> np.ndarray:

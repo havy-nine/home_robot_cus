@@ -66,6 +66,13 @@ class DiscretePlanner:
         discrete_actions: bool = True,
         continuous_angle_tolerance: float = 30.0,
     ):
+        # --- 추가 시작 ---
+        self.position_history = []  # 위치 이력 (x, y)
+        self.stuck_threshold = 5  # 정체 판단 타임스텝 임계값 (예: 5단계)
+        self.stuck_counter = 0  # 정체 카운터
+        self.backtrack_mode = False  # 이전 위치로 돌아가는 모드
+        self.backtrack_target = None  # 돌아갈 이전 위치
+        # --- 추가 끝
         """
         Arguments:
             turn_angle (float): agent turn angle (in degrees)
@@ -138,6 +145,12 @@ class DiscretePlanner:
         self.goal_dilation_selem = skimage.morphology.disk(
             self.goal_dilation_selem_radius
         )
+        # --- 추가 시작 ---
+        self.position_history = [(self.curr_pose[0], self.curr_pose[1])]
+        self.stuck_couter = 0
+        self.backtrack_mode = False
+        self.backtrack_target = None
+        # --- 추가 끝
 
     def set_vis_dir(self, scene_id: str, episode_id: str):
         self.vis_dir = os.path.join(self.default_vis_dir, f"{scene_id}_{episode_id}")
@@ -158,38 +171,24 @@ class DiscretePlanner:
         use_dilation_for_stg: bool = False,
         timestep: int = None,
     ) -> Tuple[DiscreteNavigationAction, np.ndarray]:
-        """Plan a low-level action.
-
-        Args:
-            obstacle_map: (M, M) binary local obstacle map prediction
-            goal_map: (M, M) binary array denoting goal location
-            sensor_pose: (7,) array denoting global pose (x, y, o)
-             and local map boundaries planning window (gx1, gx2, gy1, gy2)
-            found_goal: whether we found the object goal category
-
-        Returns:
-            action: low-level action
-            closest_goal_map: (M, M) binary array denoting closest goal
-             location in the goal map in geodesic distance
-        """
-        # Reset timestep using argument; useful when there are timesteps where the discrete planner is not invoked
         if timestep is not None:
             self.timestep = timestep
 
         self.last_pose = self.curr_pose
         obstacle_map = np.rint(obstacle_map)
-
         start_x, start_y, start_o, gx1, gx2, gy1, gy2 = sensor_pose
         gx1, gx2, gy1, gy2 = int(gx1), int(gx2), int(gy1), int(gy2)
         planning_window = [gx1, gx2, gy1, gy2]
-
         start = [
             int(start_y * 100.0 / self.map_resolution - gx1),
             int(start_x * 100.0 / self.map_resolution - gy1),
         ]
         start = pu.threshold_poses(start, obstacle_map.shape)
         start = np.array(start)
-        # Cheon
+        self.curr_pose = [start_x, start_y, start_o]
+        self.visited_map[gx1:gx2, gy1:gy2][
+            start[0] : start[0] + 1, start[1] : start[1] + 1
+        ] = 1
         # debug = True
         if debug:
             print()
@@ -197,22 +196,76 @@ class DiscretePlanner:
             print("Found goal:", found_goal)
             print("Goal points provided:", np.any(goal_map > 0))
 
-        self.curr_pose = [start_x, start_y, start_o]
-        self.visited_map[gx1:gx2, gy1:gy2][
-            start[0] - 0 : start[0] + 1, start[1] - 0 : start[1] + 1
-        ] = 1
+        current_position = (start_x, start_y)
+        self.position_history.append(current_position)
+        print("image location", self.vis_dir)
+        if len(self.position_history) > self.stuck_threshold:
+            recent_positions = self.position_history[-self.stuck_threshold :]
+            position_changes = [
+                np.linalg.norm(
+                    np.array(recent_positions[i]) - np.array(recent_positions[i - 1])
+                )
+                for i in range(1, len(recent_positions))
+            ]
+            if debug:
+                print(f"Recent Positions: {recent_positions}")
+                print(f"Position Changes: {position_changes}")
+            if all(change < 0.05 for change in position_changes):
+                self.stuck_counter += 1
+                print("back track occur")
+                if debug:
+                    print(f"Stuck detected! Counter: {self.stuck_counter}")
+                    print(f"Backtrack Mode: {self.backtrack_mode}")
+                    print(f"Stuck Threshold: {self.stuck_threshold}")
+            else:
+                self.stuck_counter = 0
+                self.backtrack_mode = False
 
-        # Check collisions if we have just moved and are uncertain
+        if self.stuck_counter >= self.stuck_threshold and not self.backtrack_mode:
+            current_pos = np.array([start_x, start_y])
+            found_far_target = False
+            if len(self.position_history) > self.stuck_threshold + 1:
+                for i in range(self.stuck_threshold + 1, len(self.position_history)):
+                    potential_target = np.array(self.position_history[-i - 1])
+                    if np.linalg.norm(current_pos - potential_target) >= 1.0:
+                        self.backtrack_target = self.position_history[-i - 1]
+                        found_far_target = True
+                        break
+            if not found_far_target:
+                angle_rad = math.radians(start_o)
+                backtrack_x = start_x - 2.0 * math.cos(angle_rad)
+                backtrack_y = start_y - 2.0 * math.sin(angle_rad)
+                self.backtrack_target = (backtrack_x, backtrack_y)
+            self.backtrack_mode = True
+            self.stuck_counter = 0
+            if debug:
+                print(
+                    f"Switching to backtrack mode. Target: {self.backtrack_target}, Distance: {np.linalg.norm(current_pos - np.array(self.backtrack_target))}m"
+                )
+
         if self.last_action == DiscreteNavigationAction.MOVE_FORWARD or (
             type(self.last_action) == ContinuousNavigationAction
             and np.linalg.norm(self.last_action.xyt[:2]) > 0
         ):
             self._check_collision()
 
+        if self.backtrack_mode:
+            backtrack_goal_map = np.zeros_like(goal_map)
+            backtrack_x, backtrack_y = self.backtrack_target
+            backtrack_cell_x = int(backtrack_y * 100.0 / self.map_resolution - gx1)
+            backtrack_cell_y = int(backtrack_x * 100.0 / self.map_resolution - gy1)
+            if debug:
+                print(f"Backtrack Cell: ({backtrack_cell_x}, {backtrack_cell_y})")
+            if (
+                0 <= backtrack_cell_x < goal_map.shape[0]
+                and 0 <= backtrack_cell_y < goal_map.shape[1]
+            ):
+                backtrack_goal_map[backtrack_cell_x, backtrack_cell_y] = 1
+            target_goal_map = backtrack_goal_map
+        else:
+            target_goal_map = goal_map
+
         try:
-            # High-level goal -> short-term goal
-            # Extracts a local waypoint
-            # Defined by the step size - should be relatively close to the robot
             (
                 short_term_goal,
                 closest_goal_map,
@@ -222,7 +275,7 @@ class DiscretePlanner:
                 dilated_obstacles,
             ) = self._get_short_term_goal(
                 obstacle_map,
-                np.copy(goal_map),
+                target_goal_map,
                 start,
                 planning_window,
                 plan_to_dilated_goal=use_dilation_for_stg,
@@ -236,7 +289,25 @@ class DiscretePlanner:
                 (0, 0),
                 np.zeros(goal_map.shape),
             )
-        # Short term goal is in cm, start_x and start_y are in m
+
+        if (
+            self.backtrack_mode
+            and np.linalg.norm(
+                np.array([start_x, start_y]) - np.array([backtrack_x, backtrack_y])
+            )
+            < 0.2
+        ):
+            self.backtrack_mode = False
+            self.backtrack_target = None
+            stuck_x, stuck_y = self.position_history[-1]
+            stuck_cell_x = int(stuck_x * 100.0 / self.map_resolution - gx1)
+            stuck_cell_y = int(stuck_y * 100.0 / self.map_resolution - gy1)
+            self.collision_map[
+                stuck_cell_x - 1 : stuck_cell_x + 2, stuck_cell_y - 1 : stuck_cell_y + 2
+            ] = 1
+            if debug:
+                print("Backtrack completed. Added stuck point to collision map.")
+
         if debug:
             print("Current pose:", start)
             print("Short term goal:", short_term_goal)
@@ -253,14 +324,9 @@ class DiscretePlanner:
                 dist_to_short_term_goal * self.map_resolution * CM_TO_METERS,
             )
             print("Replan:", replan)
-        # t1 = time.time()
-        # print(f"[Planning] get_short_term_goal() time: {t1 - t0}")
 
-        # We were not able to find a path to the high-level goal
         if replan and not stop:
-            # Clean collision map
             self.collision_map *= 0
-            # Reduce obstacle dilation
             if self.curr_obs_dilation_selem_radius > self.min_obs_dilation_selem_radius:
                 self.curr_obs_dilation_selem_radius -= 1
                 self.obs_dilation_selem = skimage.morphology.disk(
@@ -270,7 +336,6 @@ class DiscretePlanner:
                     print(
                         f"reduced obs dilation to {self.curr_obs_dilation_selem_radius}"
                     )
-
             if found_goal:
                 if debug:
                     print(
@@ -296,8 +361,6 @@ class DiscretePlanner:
                 found_goal = False
                 if replan:
                     print("Nowhere left to explore. Stopping.")
-                    # Calling the STOP action here will cause the agent to try grasping
-                    #  TODO separate out STOP_SUCCESS and STOP_FAILURE actions
                     return (
                         DiscreteNavigationAction.STOP,
                         closest_goal_map,
@@ -305,37 +368,26 @@ class DiscretePlanner:
                         dilated_obstacles,
                     )
 
-        # Normalize agent angle
         angle_agent = pu.normalize_angle(start_o)
-
-        # If we found a short term goal worth moving towards...
         stg_x, stg_y = short_term_goal
         relative_stg_x, relative_stg_y = stg_x - start[0], stg_y - start[1]
         angle_st_goal = math.degrees(math.atan2(relative_stg_x, relative_stg_y))
         relative_angle_to_stg = pu.normalize_angle(angle_agent - angle_st_goal)
-
-        # Compute angle to the final goal
         goal_x, goal_y = closest_goal_pt
         angle_goal = math.degrees(math.atan2(goal_x - start[0], goal_y - start[1]))
         relative_angle_to_closest_goal = pu.normalize_angle(angle_agent - angle_goal)
 
         if debug:
-            # Actual metric distance to goal
             distance_to_goal = np.linalg.norm(np.array([goal_x, goal_y]) - start)
             distance_to_goal_cm = distance_to_goal * self.map_resolution
-            # Display information
             print("-----------------")
             print("Found reachable goal:", found_goal)
             print("Stop:", stop)
             print("Angle to goal:", relative_angle_to_closest_goal)
             print("Distance to goal", distance_to_goal)
             print(
-                "Distance in cm:",
-                distance_to_goal_cm,
-                ">",
-                self.min_goal_distance_cm,
+                "Distance in cm:", distance_to_goal_cm, ">", self.min_goal_distance_cm
             )
-
             m_relative_stg_x, m_relative_stg_y = [
                 CM_TO_METERS * self.map_resolution * d
                 for d in [relative_stg_x, relative_stg_y]
@@ -355,11 +407,10 @@ class DiscretePlanner:
             relative_angle_to_stg,
             relative_angle_to_closest_goal,
             start_o,
-            found_goal,
-            stop,
+            found_goal and not self.backtrack_mode,
+            stop and not self.backtrack_mode,
             debug,
         )
-
         self.last_action = action
         return action, closest_goal_map, short_term_goal, dilated_obstacles
 

@@ -82,3 +82,12 @@ projects/habitat_ovmm/configs/agent/generated/*
 
 # Emacs
 *~
+# datadump
+datadump_*/
+# data
+data/
+
+# ig vlm back algorithm 
+src/home_robot/home_robot/navigation_planner/discrete_planner_back.py
+src/home_robot/home_robot/navigation_planner/discrete_planner_vlm.py
+src/home_robot_sim/home_robot_sim/env/habitat_objectnav_env/visualizer2.py

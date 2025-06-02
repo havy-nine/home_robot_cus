@@ -33,12 +33,14 @@ class OvmmPerception:
         self.config = config
         self._use_detic_viz = config.ENVIRONMENT.use_detic_viz
         self._detection_module = getattr(config.AGENT, "detection_module", "detic")
+        print(getattr(config.AGENT, "detection_module", "test"))  # cheon
         self._vocabularies: Dict[int, RearrangeDETICCategories] = {}
         self._current_vocabulary: RearrangeDETICCategories = None
         self._current_vocabulary_id: int = None
         self.verbose = verbose
         if self._detection_module == "detic":
             # Lazy import
+            # print("detic used")
             from home_robot.perception.detection.detic.detic_perception import (
                 DeticPerception,
             )
@@ -52,16 +54,21 @@ class OvmmPerception:
                 **module_kwargs,
             )
         elif self._detection_module == "grounded_sam":
+            # cheon
+            print("grounded_sam used")
+
             from home_robot.perception.detection.grounded_sam.grounded_sam_perception import (
                 GroundedSAMPerception,
             )
 
             self._segmentation = GroundedSAMPerception(
+                # vocabulary="custom"
                 custom_vocabulary=".",
                 sem_gpu_id=gpu_device_id,
                 verbose=verbose,
                 **module_kwargs,
             )
+            print("In wrapper.py", **module_kwargs)
         else:
             raise NotImplementedError
 
