@@ -41,13 +41,13 @@ def remove_boundary(mat: np.ndarray, value=1) -> np.ndarray:
     return mat[value:-value, value:-value]
 
 
-class DiscretePlanner:
-    """
-    This class translates planner inputs into a discrete low-level action
-    using an FMM planner.
+# class DiscretePlanner:
+#     """
+#     This class translates planner inputs into a discrete low-level action
+#     using an FMM planner.
 
-    This is a wrapper used to navigate to a particular object/goal location.
-    """
+#     This is a wrapper used to navigate to a particular object/goal location.
+#     """
 
 
 class DiscretePlanner:
