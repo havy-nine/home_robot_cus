@@ -113,9 +113,9 @@ class HabitatOpenVocabManipEnv(HabitatEnv):
 
         self.visualizer.set_vis_dir(scene_id=scene_id, episode_id=episode_id)
 
-    def rm_folder(self):
-        scene_id = self.get_current_episode().scene_id.split("/")[-1].split(".")[0]
-
+    def rm_folder(self, scene_id=str):
+        # scene_id = self.get_current_episode().scene_id.split("/")[-1].split(".")[0]
+        print(f"In habitat_ovmm_env.py, {scene_id}")
         self.visualizer.rm_folder(scene_id=scene_id)
 
     def reset(self):

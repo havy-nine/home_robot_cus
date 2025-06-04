@@ -167,8 +167,9 @@ class Visualizer:
         os.makedirs(self.vis_dir, exist_ok=True)
 
     def rm_folder(self, scene_id: str):
-        shutil.rmtree(self.vis_dir, ignore_errors=True)
-        print(self.vis_dir)
+        prev_dir = os.path.join(self.default_vis_dir, f"{scene_id}")
+        shutil.rmtree(prev_dir, ignore_errors=True)
+        print(f"in visualizer.py, {self.vis_dir}")
 
     def disable_print_images(self):
         self.print_images = False
